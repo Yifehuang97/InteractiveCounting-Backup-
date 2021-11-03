@@ -15,23 +15,20 @@ import numpy as np
 import matplotlib.pyplot as plt
 import torch.nn.functional as F
 
-# T_l
-REGION_LOWER_BOUND = 150
-# T_u
-REGION_UPPER_BOUND = 600
-# P_s
+#This four hyper-parameters is not used
+#Just Ignore them
+REGION_BOTTOM_BOUND = 250
+REGION_UPPER_BOUND = 1250
 TOO_SMALL_PENALTY = 1
-# P_l
 TOO_LARGE_PENALTY = 1
-# T
-STOP_SIZE = 750
-
+'''
+#####################################################Region Viusalization##############################################
+'''
 class int_region():
 
     def __init__(self):
-        # Region Attribute and Initalization
+        #Region Attribute
         self.pixel_list = []
-        self.L = []
         self.label_index = 0
         self.pix_num = 0
         self.peakx = 0
@@ -40,7 +37,7 @@ class int_region():
         self.panelty = 0
         self.boundary = []
 
-        # Inter Search
+        #Inter Search
         self.best_pixel_list = None
         self.best_panelty = None
         self.best_sum = None
@@ -67,46 +64,41 @@ class int_region():
 
         '''
         !!!!!!!Important Note help you understand it!!!!!!!!!
-        In expand self.L is the R.L in our paper, self.pixel_list is the L in Algorithm 1
-        In other function region.pixel_list is the R.L in our paper
-        The other implementation is identical with the algorithm in our paper.
+        In this implementation R.L is self.pixel_list + new_pix
+        self.pixel_list contains the pixel fully searched
+        new_pix contains the pixel that we haven't search its neighbor
+        To speed up, I skip the R.L<-L + L^ in this implementation
+        only update the R*.L that is self.best_pixel_list = self.pixel_list + new_pix
+
+        In this function R.L = self.pixel_list + new_pix
+        In other function R.L = self.pixel_list
+
+        Hope this will help you understand my code.
         '''
 
         w, h = density.shape
         total = w * h
         prediction = np.rint(np.sum(density))
-
-        # Hyper-parameters for region expanding
         CONUT_LIMIT = 4
-        REGION_LOWER_BOUND = 150
-        REGION_UPPER_BOUND = 600
-        COUNT_LIMIT_PENALTY = 10
-        TOO_SMALL_PENALTY = 1
-        TOO_LARGE_PENALTY = 1
-        STOP_SIZE = 750
+        #T_{l} in our paper
+        REGION_BOTTOM_BOUND = min(np.rint(total / prediction) * CONUT_LIMIT, 150)
+        #Stop size T in our paper
+        REGION_UPPER_BOUND = min(REGION_BOTTOM_BOUND * 5, 750)
 
-        # Adjust the lower_bound or upper_bound region with low counting
-        REGION_BOTTOM_BOUND = min(np.rint(total / prediction) * CONUT_LIMIT, REGION_LOWER_BOUND)
-        REGION_UPPER_BOUND = min(REGION_BOTTOM_BOUND * 4, REGION_UPPER_BOUND)
-        STOP_SIZE = min(REGION_BOTTOM_BOUND * 5, STOP_SIZE)
-
-        # Initalization
         py = self.peaky
         px = self.peakx
-        # hat{L}
         new_pix = [[py, px]]
         label[py][px] = region_label
-
-        # For Search Next Peak
+        #For Search Next Peak
         smooth_density[py][px] = -1
+        #Cal Panelty
         sum = density[py][px]
+        #Size Constrain
         pix_num = 1
         self.label_index = region_label
-        # Foreground Background Constrain
+        #Expanding
         for_num = 1
         bak_num = 0
-
-        # Initalize R*
         self.best_pixel_list = new_pix
         self.best_sum = copy.deepcopy(sum)
         self.best_penalty = np.abs(sum - np.rint(sum)) / max(np.rint(sum), 1)
@@ -115,62 +107,38 @@ class int_region():
         if sum > CONUT_LIMIT:
             self.best_penalty += np.ceil(sum - CONUT_LIMIT)
 
-        '''
-        Start Expanding
-        '''
         while len(new_pix) != 0:
             sy, sx = new_pix.pop(0)
             self.pixel_list.append([sy, sx])
             for new_y in [sy - 1, sy, sy + 1]:
                 for new_x in [sx - 1, sx, sx + 1]:
                     if self.check_pixel(new_y, new_x, smooth_density, label):
-                        # Add Foreground Pixel
+                        #Add Foreground Pixel
                         if smooth_density[new_y][new_x] > 0:
                             new_pix.append([new_y, new_x])
                             label[new_y][new_x] = region_label
-                            # Update for search the next peak
                             smooth_density[new_y][new_x] = -1
-                            # Update R.s, R.i and Fn
                             sum += density[new_y][new_x]
                             pix_num += 1
                             for_num += 1
-                            # Update R.L,
-                            # to speed it up
-                            # self.L = self.pixel_list + new_pix
-                            # Check Integer Penalty
                             if self.best_pixel_list is None:
                                 self.best_pixel_list = self.pixel_list + new_pix
                                 self.best_sum = copy.deepcopy(sum)
-                                # First Term
                                 self.best_penalty = np.abs(sum - np.rint(sum)) / max(np.rint(sum), 1)
-                                # Second Term
                                 if pix_num < REGION_BOTTOM_BOUND:
-                                    self.best_penalty += TOO_SMALL_PENALTY * (
-                                                (REGION_BOTTOM_BOUND - pix_num) / REGION_BOTTOM_BOUND)
-                                # Third Term
-                                if pix_num > REGION_UPPER_BOUND:
-                                    self.best_penalty += TOO_LARGE_PENALTY * ((pix_num - REGION_UPPER_BOUND) / pix_num)
-                                # Fourth Term
+                                    self.best_penalty += ((REGION_BOTTOM_BOUND - pix_num) / REGION_BOTTOM_BOUND)
                                 if sum > CONUT_LIMIT:
-                                    self.best_penalty += COUNT_LIMIT_PENALTY * np.ceil(sum - CONUT_LIMIT)
+                                    self.best_penalty += np.ceil(sum - CONUT_LIMIT)
                             else:
                                 new_penalty = np.abs(sum - np.rint(sum)) / max(np.rint(sum), 1)
-                                # Second Term
                                 if pix_num < REGION_BOTTOM_BOUND:
-                                    new_penalty += TOO_SMALL_PENALTY * (
-                                            (REGION_BOTTOM_BOUND - pix_num) / REGION_BOTTOM_BOUND)
-                                # Third Term
-                                if pix_num > REGION_UPPER_BOUND:
-                                    new_penalty += TOO_LARGE_PENALTY * ((pix_num - REGION_UPPER_BOUND) / pix_num)
-                                # Fourth Term
+                                    new_penalty += ((REGION_BOTTOM_BOUND - pix_num) / REGION_BOTTOM_BOUND)
                                 if sum > CONUT_LIMIT:
-                                    new_penalty += COUNT_LIMIT_PENALTY * np.ceil(sum - CONUT_LIMIT)
-
+                                    new_penalty += np.ceil(sum - CONUT_LIMIT)
                                 if new_penalty <= self.best_penalty:
                                     self.best_penalty = new_penalty
                                     self.best_pixel_list = self.pixel_list + new_pix
                                     self.best_sum = copy.deepcopy(sum)
-
                         elif for_num > bak_num:
                             if self.check_pixel(new_y, new_x, smooth_density, label) and density[new_y][new_x] == 0:
                                 new_pix.append([new_y, new_x])
@@ -179,11 +147,7 @@ class int_region():
                                 smooth_density[new_y][new_x] = -1
                                 pix_num += 1
                                 bak_num += 1
-                                # Update R.L,
-                                # to speed it up
-                                # self.L = self.pixel_list + new_pix
-
-            if pix_num > STOP_SIZE:
+            if pix_num > REGION_UPPER_BOUND:
                 break
 
         if self.best_pixel_list is not None and len(self.best_pixel_list) != 0:
@@ -193,11 +157,10 @@ class int_region():
         self.pix_num = len(self.pixel_list)
         return self.pixel_list, self.sum
 
-
 class back_region():
 
     def __init__(self):
-        # Region Attribute
+        #Region Attribute
         self.pixel_list = []
         self.label_index = 0
         self.pix_num = 0
@@ -225,6 +188,13 @@ class back_region():
         return True
 
     def expand(self, density, smooth_density, label, region_label):
+
+        '''
+        This function is to generate background regions
+        T_{l} is not used in this function, since I don't constrain the region size of background regions
+        T is the same as foreground regions' generation
+        '''
+
         w, h = density.shape
         total = w * h
         prediction = np.rint(np.sum(density))
@@ -238,6 +208,7 @@ class back_region():
         sum = density[py][px]
         pix_num = 0
         self.label_index = region_label
+
 
         while len(new_pix) != 0:
             sy, sx = new_pix.pop(0)
@@ -258,7 +229,6 @@ class back_region():
         self.pix_num = len(self.pixel_list)
         return self.pixel_list, self.sum, self.boundary
 
-
 class VIS():
 
     def __init__(self, density):
@@ -277,7 +247,7 @@ class VIS():
         t_smooth_density = torch.from_numpy(smooth_density).unsqueeze(0).unsqueeze(0)
         t_density = torch.from_numpy(density).unsqueeze(0).unsqueeze(0)
         s_t_smooth_density = F.interpolate(t_smooth_density, size=(
-            int(t_smooth_density.shape[-2] / 4), int(t_smooth_density.shape[-1] / 4)), mode='bilinear')
+        int(t_smooth_density.shape[-2] / 4), int(t_smooth_density.shape[-1] / 4)), mode='bilinear')
         s_t_density = F.interpolate(t_density, size=(int(t_density.shape[-2] / 4), int(t_density.shape[-1] / 4)),
                                     mode='bilinear')
         Ssmooth_density = s_t_smooth_density.numpy().squeeze()
@@ -341,7 +311,7 @@ class VIS():
         return region_list
 
     def solve(self):
-        # Pos Region Gen
+        #Pos Region Gen
         pixel_sum = self.prediction
         self.region_list = []
         label_index = 1
@@ -376,7 +346,7 @@ class VIS():
         self.region_list.append(temp_region)
         label_index += 1
 
-        # Background Regions
+        #Background Regions
         while np.max(self.Ssmooth_density) != -1:
             temp_region = back_region()
             density = copy.deepcopy(self.Sdensity)
@@ -390,7 +360,7 @@ class VIS():
             self.region_list.append(temp_region)
             label_index += 1
 
-        # After Merge Small Region
+        #After Merge Small Region
         while True:
             no_small = True
             for i in range(len(self.region_list)):
@@ -411,6 +381,8 @@ class VIS():
         self.Llabel = np.ceil(resize_label).astype(np.int32)
 
     def get_boundary(self):
+        #Only for visualization, you can ignore this function
+        #Draw the boundary of each region
         b_num = 0
         self.Sboundary_mask = np.ones(self.Slabel.shape)
         boundary_set = []
@@ -426,9 +398,9 @@ class VIS():
                         exist_boundary_set.append(pix)
             check_list = reg.pixel_list + exist_boundary_set
             for pix in check_list:
-                y, x = pix[0], pix[1]
+                y,x = pix[0], pix[1]
                 is_bound = False
-                for new_pix in [[y + 1, x], [y - 1, x], [y, x + 1], [y, x - 1]]:
+                for new_pix in [[y+1, x], [y-1, x], [y, x+1], [y, x-1]]:
                     if new_pix not in check_list:
                         is_bound = True
                 if is_bound:
@@ -439,12 +411,13 @@ class VIS():
             boundary_set += new_boundary_set
         self.Sboundary = np.rint(self.Sboundary_mask).astype(np.int32)
         small_boundary = torch.from_numpy(self.Sboundary_mask.astype(np.float32)).unsqueeze(0).unsqueeze(0)
-        resize_boundary = F.interpolate(small_boundary, size=(self.Llabel.shape[0], self.Llabel.shape[1]),
-                                        mode='bilinear')
+        resize_boundary = F.interpolate(small_boundary, size=(self.Llabel.shape[0], self.Llabel.shape[1]), mode='bilinear')
         resize_boundary = resize_boundary.numpy().squeeze()
         self.Lboundary = np.rint(resize_boundary).astype(np.int32)
 
     def get_boundary_poly(self):
+        # Only for visualization, you can ignore this function
+        # Draw the boundary of each region using poly
         b_num = 0
         self.Sboundary_mask = np.zeros(self.Slabel.shape)
         boundary_set = []
@@ -453,7 +426,7 @@ class VIS():
         for reg in self.region_list:
             new_boundary_set = []
             for pix in reg.pixel_list:
-                y, x = pix[0], pix[1]
+                y,x = pix[0], pix[1]
                 is_bound = False
                 for new_pix in [[y + 1, x], [y - 1, x], [y, x + 1], [y, x - 1]]:
                     if new_pix not in reg.pixel_list:
@@ -466,12 +439,13 @@ class VIS():
             boundary_set += new_boundary_set
             break
         small_boundary = torch.from_numpy(self.Sboundary_mask.astype(np.float32)).unsqueeze(0).unsqueeze(0)
-        resize_boundary = F.interpolate(small_boundary, size=(self.Llabel.shape[0], self.Llabel.shape[1]),
-                                        mode='bilinear')
+        resize_boundary = F.interpolate(small_boundary, size=(self.Llabel.shape[0], self.Llabel.shape[1]), mode='bilinear')
         resize_boundary = resize_boundary.numpy().squeeze()
         self.Lboundary = np.rint(resize_boundary).astype(np.int32)
 
     def get_color(self):
+        # Only for visualization, you can ignore this function
+        # Create a color mask of each different regions
         classes = np.max(self.Llabel) + 1
         palette = np.random.randint(0, 255, size=(classes, 3))
         palette = np.array(palette)
